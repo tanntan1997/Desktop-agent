@@ -1,0 +1,38 @@
+{
+  "agentName": "qa-mac-01",
+  "serverUrl": "wss://device-hub.example.com/agent",
+  "serverToken": "replace-with-server-issued-token",
+  "listenAddr": "127.0.0.1:7100",
+  "allowedOrigins": [
+    "https://device-hub.example.com"
+  ],
+  "pollIntervalSec": 2,
+  "maxConcurrentRequests": 16,
+  "allowShell": false,
+  "logLevel": "info",
+  "ios": {
+    "backend": "auto",
+    "startTunnel": false,
+    "wdaBasePort": 8100,
+    "wdaDevicePort": 8100,
+    "wdaBundleId": "com.facebook.WebDriverAgentRunner.xctrunner"
+  },
+  "appium": {
+    "url": "http://127.0.0.1:4723",
+    "autoStart": false,
+    "command": "appium"
+  },
+  "runners": {
+    "pytest": {
+      "command": "pytest",
+      "workDir": "/path/to/mbb-appium-e2e"
+    },
+    "patrol": {
+      "command": "patrol",
+      "args": [
+        "test"
+      ],
+      "workDir": "/path/to/flutter-app"
+    }
+  }
+}

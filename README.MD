@@ -39,14 +39,143 @@ curl -o s.png "localhost:7100/api/devices/<serial>/screenshot?token=$TOKEN"
 curl -H "Authorization: Bearer $TOKEN" localhost:7100/api/devices/<serial>/source
 ```
 
-Try the full tunnel path with the bundled reference server:
+Run the web server and an agent together on this machine in one step
+(builds both, prints the dashboard link, Ctrl+C stops both; logs in `dist/logs/`):
 
 ```bash
-go run ./cmd/hub-example -listen :8080 -token secret &
-device-agent -server ws://127.0.0.1:8080/agent -server-token secret
-curl localhost:8080/agents
-curl -XPOST localhost:8080/agents/<agentId>/rpc -d '{"method":"device.source","params":{"serial":"<serial>"}}'
+make run-local                              # dashboard: http://localhost:8080/?token=local-api-token
+PORT=9090 AGENT_PORT=7101 make run-local    # if 8080 / 7100 are taken
 ```
+
+Or start them by hand with the bundled web server (see [Web server](#web-server-device-hub)):
+
+```bash
+go run ./cmd/server -agent-token secret -api-token api &
+device-agent -server ws://127.0.0.1:8080/agent -server-token secret
+curl -H "Authorization: Bearer api" localhost:8080/api/devices
+curl -H "Authorization: Bearer api" -XPOST localhost:8080/api/agents/<agentId>/rpc -d '{"method":"device.source","params":{"serial":"<serial>"}}'
+```
+
+## Web server (`device-hub`)
+
+`cmd/server` is the server agents connect to. It keeps a registry of
+connected agents and their devices, routes requests down each tunnel (with
+cancel on timeout or client disconnect), and exposes everything over a
+token-protected REST API, an SSE event stream, and a small dashboard at `/`
+(live screen, click to tap, drag to swipe, keys, text, app launch/stop).
+
+```bash
+make build-server                 # or: make dist-server (linux/darwin/windows)
+./dist/device-hub -agent-token AGENT_SECRET -api-token API_SECRET          # :8080
+./dist/device-agent -server ws://hub:8080/agent -server-token AGENT_SECRET
+open http://hub:8080/             # paste API_SECRET into the token box
+```
+
+Use `-tls-cert/-tls-key` (or a reverse proxy) so agents connect over `wss://`.
+Settings come from flags, then `HUB_*` env vars (`HUB_LISTEN`,
+`HUB_AGENT_TOKEN`, `HUB_API_TOKEN`, `HUB_TLS_CERT`, `HUB_TLS_KEY`,
+`HUB_LOG_LEVEL`), then `-config` ([server.config.example.json](server.config.example.json)).
+`agentTokens` maps agent ID → token for per-machine credentials; the shared
+`agentToken` is accepted from any agent. If no API token is set, one is
+generated and logged at startup. `-insecure` turns all auth off (local only).
+
+API (auth: `Authorization: Bearer <token>` or `?token=`). `{agent}` is the
+agent ID from `/api/agents`; every agent call accepts `?timeoutSec=` (default 120).
+
+| Route | |
+|---|---|
+| `GET /api/agents`, `GET /api/agents/{agent}` | connected agents (hello info + devices) |
+| `GET /api/devices` | devices of all agents, each with `agentId`, `agentName` |
+| `POST /api/agents/{agent}/rpc` | any method: `{"method","params","timeoutSec"}` → `{"result"}` |
+| `GET …/devices/{serial}` | `device.info` |
+| `GET …/devices/{serial}/screenshot` | PNG |
+| `GET …/devices/{serial}/source` | XML |
+| `POST …/devices/{serial}/tap\|swipe\|text\|key` | body = method params |
+| `POST …/devices/{serial}/apps/install\|launch\|terminate` | body = method params |
+| `GET\|POST /api/agents/{agent}/jobs` | `job.list` / `job.start` |
+| `GET …/jobs/{id}`, `POST …/jobs/{id}/cancel`, `GET …/jobs/{id}/logs?since=&limit=` | |
+| `GET …/jobs/{id}/artifacts`, `GET …/jobs/{id}/artifacts/{name}` | list / download file |
+| `GET /api/events?agent=&event=a,b` | SSE: `agent.connected`, `agent.disconnected` + all agent events, data `{"agentId","event","data"}` |
+
+Errors are `{"error":{"code","message"}}` with the status mapped from the
+code (`not_found` 404, `busy` 409, `unavailable` 503, `timeout` 504, …).
+State is in memory: agents re-register on reconnect, so a restart only loses
+in-flight requests. Run one instance (or pin agents to instances) — calls
+must reach the instance holding the agent's socket.
+
+## AI tests (explore once, replay without AI)
+
+Write a test in plain language; an OpenAI model explores it once on a real device and
+records the steps; every later run replays those steps deterministically,
+with no model calls.
+
+```
+Verify Dashboard menu of Exchange is visible
+1. Open MBB app
+2. Log in with PIN ${PIN}
+3. Verify the Exchange menu is visible on the dashboard
+```
+
+1. **Set up**: export `OPENAI_API_KEY` before starting `device-hub` (or
+   `make run-local`). Open **AI Tests** in the dashboard (`/tests.html`).
+   For Azure OpenAI or another OpenAI-compatible endpoint, also set
+   `OPENAI_BASE_URL` (or `-ai-base-url`) and pick a vision + tool-calling model
+   with `-ai-model`.
+2. **Create** a test: prompt, optional app id (package / bundle id) and
+   variables (`PIN=123456`). Variable values are typed on the device but are
+   **never sent to the model** — it only sees `${PIN}`; values are masked in
+   API responses and redacted from on-screen text the model reads.
+3. **Explore with AI** on a device. The model (default `gpt-4o-mini`, Chat
+   Completions API, `store: false`) sees each screen
+   as a screenshot plus the UI hierarchy and calls tools (`launch_app`, `tap`,
+   `input_text`, `swipe`, `scroll_to`, `press_key`, `wait`, `assert_visible`,
+   `assert_not_visible`, `finish`). The timeline shows its messages and each
+   action live. Each successful action is recorded as a step with a **stable
+   locator** (resource-id → content-desc → text, plus index only when needed);
+   coordinates are used only when no element exists and are stored as screen
+   fractions. At the end it keeps only the steps that form a clean script
+   (detours dropped).
+4. **Verify** (on by default): the kept steps are immediately replayed from a
+   fresh app start without the model. Passing marks the test *verified*.
+5. **Run recorded steps** any time — from the dashboard, CI, or the API. Each
+   step waits up to 10s for its element, failures stop the run with the step,
+   reason and a screenshot. Steps are editable as JSON.
+
+API (same auth as the rest of `/api`):
+
+| Route | |
+|---|---|
+| `GET/POST /api/tests`, `GET/PUT/DELETE /api/tests/{id}` | manage tests (`PUT` without `steps` keeps them; `"******"` keeps a variable) |
+| `POST /api/tests/{id}/explore` | `{"agentId","serial","verify":true}` → run (202) |
+| `POST /api/tests/{id}/run` | `{"agentId","serial"}` → replay run (202) |
+| `GET /api/runs?testId=`, `GET /api/runs/{id}` | run status, step results, timeline, token usage |
+| `POST /api/runs/{id}/cancel`, `POST /api/runs/{id}/save-steps` | stop a run / use an exploration's steps |
+| `GET /api/runs/{id}/files/{n}.jpg` | screenshot after step *n* |
+| SSE `run.updated`, `run.log` on `/api/events` | live progress |
+
+CI example — replay and wait for the verdict:
+
+```bash
+RUN=$(curl -s -H "Authorization: Bearer $HUB_TOKEN" -XPOST $HUB/api/tests/$TEST/run \
+  -d "{\"agentId\":\"$AGENT\",\"serial\":\"$SERIAL\"}" | jq -r .id)
+until S=$(curl -s -H "Authorization: Bearer $HUB_TOKEN" $HUB/api/runs/$RUN | jq -r .status); [ "$S" != running ]; do sleep 3; done
+echo "$S"; [ "$S" = passed ]
+```
+
+Settings: `-ai-model` (e.g. `gpt-5.5` for long or tricky flows),
+`-ai-effort` (reasoning effort; sent only to reasoning models such as gpt-5 /
+o-series, default `medium` there), `-ai-base-url`,
+`-no-ai`, `-data` (default `./hub-data`: tests, runs, screenshots as
+JSON/JPEG files), or `ai.*` / `dataDir` in the config file. One run per device
+at a time; runs time out after 30 minutes; an exploration stops after 60 model
+turns. Only the latest screen (screenshot + element list) is kept in the
+model's context — older screens are replaced by a placeholder — so long
+explorations fit gpt-4o-mini's 128K window.
+
+Tips: give the app id so runs start from a fresh launch; phrase expectations
+as "verify …" so they become assertions; banking apps that block screenshots
+(`FLAG_SECURE`) still work through the UI hierarchy, but Flutter screens need
+Semantics labels to be targetable (otherwise steps fall back to coordinates).
 
 ## Host prerequisites
 
@@ -198,7 +327,11 @@ reports/screenshots into `$ARTIFACTS_DIR`; `output.log` is always captured.
 
 ```
 cmd/agent            entrypoint, flags
-cmd/hub-example      reference web-server side of the tunnel
+cmd/server           web server (device-hub): tunnel endpoint, REST, SSE, dashboard
+cmd/hub-example      minimal reference server (superseded by cmd/server)
+internal/hub         agent registry, request/response routing, event fan-out
+internal/autotest    AI tests: OpenAI explorer, step recorder/replayer, UI tree locators, store
+internal/server      device-hub HTTP API + embedded dashboard (web/)
 internal/agent       wiring + RPC method table
 internal/device      Driver interface, polling Manager
   android/           adb driver

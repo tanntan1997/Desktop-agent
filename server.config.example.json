@@ -1,0 +1,15 @@
+{
+  "listen": ":8443",
+  "tlsCert": "/etc/device-hub/tls.crt",
+  "tlsKey": "/etc/device-hub/tls.key",
+  "agentTokens": {
+    "e0715d0c9a4b...": "per-agent-token-for-qa-mac-01"
+  },
+  "agentToken": "",
+  "apiTokens": [
+    "token-for-ci",
+    "token-for-qa-team"
+  ],
+  "allowedOrigins": [],
+  "logLevel": "info"
+}

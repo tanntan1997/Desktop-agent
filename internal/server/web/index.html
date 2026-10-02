@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Device Hub</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --fg:#1d2330; --muted:#6b7385; --line:#e3e6ec; --accent:#2f6fed; --ok:#1a9b55; --bad:#d14343; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171d; --panel:#1c2028; --fg:#e6e9ef; --muted:#8e96a8; --line:#2b313c; --accent:#5b8cff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:16px; margin:0; }
+  header nav { margin-right:auto; display:flex; gap:12px; }
+  header nav a { color:var(--muted); text-decoration:none; } header nav a.on { color:var(--fg); font-weight:600; }
+  input, button, select { font:inherit; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:5px 9px; }
+  button { cursor:pointer; } button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  main { display:grid; grid-template-columns:300px 1fr; gap:16px; padding:16px; }
+  @media (max-width: 800px) { main { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .agent { margin-bottom:12px; }
+  .agent b { display:block; }
+  .muted { color:var(--muted); font-size:12px; }
+  .dev { display:block; width:100%; text-align:left; margin-top:6px; }
+  .dev.active { border-color:var(--accent); outline:1px solid var(--accent); }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; background:var(--muted); }
+  .dot.online { background:var(--ok); } .dot.bad { background:var(--bad); }
+  .viewer { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+  .screen { position:relative; max-width:380px; width:100%; }
+  .screen img { width:100%; border-radius:12px; border:1px solid var(--line); user-select:none; -webkit-user-drag:none; cursor:crosshair; display:block; min-height:200px; background:#0002; }
+  .controls { flex:1; min-width:240px; display:flex; flex-direction:column; gap:10px; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; }
+  .row input { flex:1; min-width:0; }
+  pre { margin:0; max-height:260px; overflow:auto; font-size:12px; white-space:pre-wrap; word-break:break-all; }
+  .err { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Device Hub</h1>
+  <nav><a href="/" class="on">Devices</a><a href="/tests.html">AI Tests</a></nav>
+  <input id="token" type="password" placeholder="API token" autocomplete="off">
+  <button id="save">Connect</button>
+</header>
+<main>
+  <section class="panel" id="agents"><span class="muted">Loading…</span></section>
+  <section class="panel">
+    <div id="empty" class="muted">Select a device.</div>
+    <div id="viewer" class="viewer" hidden>
+      <div class="screen"><img id="shot" alt="device screen"></div>
+      <div class="controls">
+        <div><b id="title"></b><div id="subtitle" class="muted"></div></div>
+        <label class="row"><input type="checkbox" id="live" checked> Live (refresh after each action and every 2s)</label>
+        <div class="row">
+          <button data-key="home">Home</button><button data-key="back">Back</button>
+          <button data-key="app_switch">Apps</button><button data-key="enter">Enter</button>
+          <button data-key="volume_up">Vol+</button><button data-key="volume_down">Vol−</button>
+        </div>
+        <form class="row" id="textForm"><input id="text" placeholder="Type text"><button>Send</button></form>
+        <form class="row" id="appForm"><input id="appId" placeholder="App id / bundle id"><button data-act="app.launch">Launch</button><button data-act="app.terminate">Stop</button></form>
+        <div class="row"><button id="source">Open UI source</button></div>
+        <div class="muted">Click the screen to tap, drag to swipe.</div>
+        <div id="status" class="muted"></div>
+      </div>
+    </div>
+    <h3>Events</h3>
+    <pre id="events" class="muted"></pre>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let token = '';
+try { token = localStorage.getItem('hubToken') || ''; } catch {}
+// A ?token= link (printed by scripts/run-local.sh) logs in and is then removed from the address bar.
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) {
+  token = urlToken;
+  try { localStorage.setItem('hubToken', token); } catch {}
+  history.replaceState(null, '', location.pathname);
+}
+$('token').value = token;
+let sel = null;          // {agentId, serial}
+let es = null;
+let timer = null;
+let busy = false;
+
+function q(extra = {}) {
+  const p = new URLSearchParams(extra);
+  if (token) p.set('token', token);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.error?.message || res.statusText);
+  return body;
+}
+
+function status(msg, isErr) {
+  $('status').textContent = msg;
+  $('status').className = isErr ? 'err' : 'muted';
+}
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+async function loadAgents() {
+  let agents;
+  try { agents = await api('/agents'); }
+  catch (e) { $('agents').innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+  if (!agents.length) { $('agents').innerHTML = '<span class="muted">No agents connected.</span>'; return; }
+  $('agents').innerHTML = agents.map((a) => `
+    <div class="agent">
+      <b>${esc(a.name || a.id)}</b>
+      <span class="muted">${esc(a.os)}/${esc(a.arch)} · v${esc(a.version)} · ${esc(a.hostname)}</span>
+      ${(a.devices || []).map((d) => `
+        <button class="dev ${sel && sel.agentId === a.id && sel.serial === d.serial ? 'active' : ''}"
+          data-agent="${esc(a.id)}" data-serial="${esc(d.serial)}" data-label="${esc(d.name || d.model || d.serial)}"
+          data-sub="${esc(d.platform)} ${esc(d.osVersion || '')} · ${esc(d.state)}">
+          <span class="dot ${d.state === 'online' ? 'online' : 'bad'}"></span>${esc(d.name || d.model || d.serial)}
+          <div class="muted">${esc(d.platform)} ${esc(d.osVersion || '')} · ${esc(d.serial)}</div>
+        </button>`).join('') || '<div class="muted">No devices.</div>'}
+    </div>`).join('');
+}
+
+$('agents').addEventListener('click', (e) => {
+  const b = e.target.closest('.dev');
+  if (!b) return;
+  sel = { agentId: b.dataset.agent, serial: b.dataset.serial };
+  document.querySelectorAll('.dev').forEach((x) => x.classList.toggle('active', x === b));
+  $('title').textContent = b.dataset.label;
+  $('subtitle').textContent = b.dataset.sub;
+  $('empty').hidden = true;
+  $('viewer').hidden = false;
+  refresh();
+});
+
+function devPath(suffix = '') {
+  return `/agents/${encodeURIComponent(sel.agentId)}/devices/${encodeURIComponent(sel.serial)}${suffix}`;
+}
+
+function refresh() {
+  if (!sel || busy) return;
+  busy = true;
+  const img = new Image();
+  img.onload = () => { $('shot').src = img.src; busy = false; };
+  img.onerror = () => { busy = false; status('screenshot failed', true); };
+  img.src = '/api' + devPath('/screenshot') + q({ t: Date.now() });
+}
+
+async function act(path, body, label) {
+  status(label + '…');
+  try { await api(devPath(path), { method: 'POST', body: JSON.stringify(body) }); status(label + ' ✓'); }
+  catch (e) { status(label + ': ' + e.message, true); }
+  if ($('live').checked) setTimeout(refresh, 300);
+}
+
+// Map a pointer position on the rendered image to screenshot pixels.
+function toDevice(ev) {
+  const img = $('shot'), r = img.getBoundingClientRect();
+  return {
+    x: Math.round((ev.clientX - r.left) * img.naturalWidth / r.width),
+    y: Math.round((ev.clientY - r.top) * img.naturalHeight / r.height),
+  };
+}
+let down = null;
+$('shot').addEventListener('pointerdown', (e) => { down = { ...toDevice(e), t: Date.now() }; });
+$('shot').addEventListener('pointerup', (e) => {
+  if (!down || !sel) return;
+  const up = toDevice(e), dist = Math.hypot(up.x - down.x, up.y - down.y);
+  if (dist < 15) act('/tap', { x: down.x, y: down.y }, `tap ${down.x},${down.y}`);
+  else act('/swipe', { x1: down.x, y1: down.y, x2: up.x, y2: up.y, durationMs: Math.max(100, Date.now() - down.t) }, 'swipe');
+  down = null;
+});
+
+document.querySelectorAll('[data-key]').forEach((b) => b.addEventListener('click', () => act('/key', { key: b.dataset.key }, b.dataset.key)));
+$('textForm').addEventListener('submit', (e) => { e.preventDefault(); act('/text', { text: $('text').value }, 'text'); $('text').value = ''; });
+$('appForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const method = e.submitter?.dataset.act || 'app.launch';
+  act(method === 'app.launch' ? '/apps/launch' : '/apps/terminate', { appId: $('appId').value }, method);
+});
+$('source').addEventListener('click', () => window.open('/api' + devPath('/source') + q(), '_blank'));
+
+function logEvent(name, data) {
+  const line = `${new Date().toLocaleTimeString()}  ${name}  ${JSON.stringify(data).slice(0, 300)}\n`;
+  const el = $('events');
+  el.textContent = (line + el.textContent).slice(0, 20000);
+}
+
+function connectEvents() {
+  if (es) es.close();
+  es = new EventSource('/api/events' + q({ event: 'agent.connected,agent.disconnected,devices.changed,job.updated' }));
+  const reload = (ev) => { logEvent(ev.type, JSON.parse(ev.data)); loadAgents(); };
+  ['agent.connected', 'agent.disconnected', 'devices.changed'].forEach((n) => es.addEventListener(n, reload));
+  es.addEventListener('job.updated', (ev) => logEvent(ev.type, JSON.parse(ev.data).data));
+}
+
+function start() {
+  loadAgents();
+  connectEvents();
+  clearInterval(timer);
+  timer = setInterval(() => { if ($('live').checked && !document.hidden) refresh(); }, 2000);
+}
+
+$('save').addEventListener('click', () => {
+  token = $('token').value.trim();
+  try { localStorage.setItem('hubToken', token); } catch {}
+  start();
+});
+start();
+</script>
+</body>
+</html>

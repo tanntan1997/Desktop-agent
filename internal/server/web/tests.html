@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Tests · Device Hub</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --fg:#1d2330; --muted:#6b7385; --line:#e3e6ec; --accent:#2f6fed; --ok:#1a9b55; --bad:#d14343; --warn:#b7791f; --think:#7a5af8; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171d; --panel:#1c2028; --fg:#e6e9ef; --muted:#8e96a8; --line:#2b313c; --accent:#5b8cff; --think:#a48bff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  header nav { margin-right:auto; display:flex; gap:12px; }
+  header nav a { color:var(--muted); text-decoration:none; } header nav a.on { color:var(--fg); font-weight:600; }
+  input, button, select, textarea { font:inherit; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:5px 9px; }
+  textarea { width:100%; resize:vertical; }
+  button { cursor:pointer; } button:hover:not(:disabled) { border-color:var(--accent); } button:disabled { opacity:.5; cursor:default; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.danger { color:var(--bad); }
+  main { display:grid; grid-template-columns:280px 1fr; gap:16px; padding:16px; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:16px; min-width:0; }
+  h2 { font-size:15px; margin:0 0 10px; } h3 { font-size:14px; margin:14px 0 8px; }
+  .muted { color:var(--muted); font-size:12px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+  .row > label { flex:1; min-width:180px; display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+  .list button { display:block; width:100%; text-align:left; margin-bottom:6px; }
+  .list button.on { border-color:var(--accent); outline:1px solid var(--accent); }
+  .badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; border:1px solid currentColor; }
+  .passed { color:var(--ok); } .failed, .error { color:var(--bad); } .running, .queued { color:var(--accent); } .canceled { color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td code { font-size:12px; word-break:break-all; }
+  .timeline { max-height:420px; overflow:auto; font-size:12.5px; border:1px solid var(--line); border-radius:8px; padding:8px; }
+  .timeline div { padding:3px 0; border-bottom:1px dashed var(--line); white-space:pre-wrap; word-break:break-word; }
+  .k-thinking { color:var(--think); font-style:italic; } .k-error { color:var(--bad); } .k-action { font-family:ui-monospace, Menlo, monospace; } .k-info { color:var(--muted); }
+  .shots { display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; }
+  .shots figure { margin:0; flex:0 0 120px; font-size:11px; }
+  .shots img { width:120px; border-radius:6px; border:2px solid var(--line); cursor:zoom-in; }
+  .shots figure.failed img { border-color:var(--bad); }
+  .err { color:var(--bad); }
+  .empty { padding:30px; text-align:center; color:var(--muted); }
+  dialog { border:none; border-radius:10px; padding:0; max-width:95vw; max-height:95vh; background:transparent; }
+  dialog img { max-height:90vh; max-width:95vw; border-radius:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Device Hub</h1>
+  <nav><a href="/">Devices</a><a href="/tests.html" class="on">AI Tests</a></nav>
+  <input id="token" type="password" placeholder="API token" autocomplete="off">
+  <button id="saveToken">Connect</button>
+</header>
+<main>
+  <aside>
+    <div class="panel">
+      <div class="row"><h2 style="margin:0;flex:1">Tests</h2><button id="newTest" class="primary">+ New</button></div>
+      <div id="tests" class="list"><span class="muted">Loading…</span></div>
+    </div>
+  </aside>
+  <section>
+    <div id="none" class="panel empty">Create a test: describe it in plain language, let AI explore it on a device once, then replay the recorded steps without AI.</div>
+    <div id="editor" hidden>
+      <div class="panel">
+        <div class="row">
+          <label>Name<input id="f-name" placeholder="Exchange menu visible on dashboard"></label>
+          <label style="max-width:260px">App id (package / bundle id)<input id="f-app" placeholder="com.example.mbb"></label>
+          <label style="max-width:130px">Platform<select id="f-platform"><option value="">any</option><option>android</option><option>ios</option></select></label>
+        </div>
+        <label class="muted">Test prompt</label>
+        <textarea id="f-prompt" rows="6" placeholder="Verify Dashboard menu of Exchange is visible&#10;1. Open MBB app&#10;2. Log in with PIN ${PIN}&#10;3. Verify the Exchange menu is visible on the dashboard"></textarea>
+        <h3>Variables <span class="muted">— one NAME=value per line; use ${NAME} in the prompt. Values are typed on the device but never sent to the AI.</span></h3>
+        <textarea id="f-vars" rows="2" placeholder="PIN=123456"></textarea>
+        <div class="row" style="margin-top:8px"><button id="save" class="primary">Save</button><button id="del" class="danger">Delete</button><span id="saveMsg" class="muted"></span></div>
+      </div>
+
+      <div class="panel">
+        <h2>Run</h2>
+        <div class="row">
+          <select id="device" style="flex:1;min-width:220px"></select>
+          <label style="flex:0;min-width:auto;flex-direction:row;align-items:center;gap:5px;color:var(--fg)"><input type="checkbox" id="verify" checked> verify by replay</label>
+          <button id="explore" class="primary">Explore with AI</button>
+          <button id="replay">Run recorded steps</button>
+        </div>
+        <div id="runMsg" class="muted"></div>
+      </div>
+
+      <div class="panel">
+        <div class="row"><h2 style="margin:0;flex:1">Recorded steps <span id="verified"></span></h2><button id="editSteps">Edit JSON</button></div>
+        <div id="steps"></div>
+        <div id="stepsJson" hidden>
+          <textarea id="f-steps" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,monospace;font-size:12px"></textarea>
+          <div class="row"><button id="saveSteps" class="primary">Save steps</button><button id="cancelSteps">Cancel</button></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Runs</h2>
+        <div id="runs"></div>
+        <div id="run" hidden>
+          <div class="row" style="margin-top:12px"><h3 style="margin:0;flex:1" id="runTitle"></h3>
+            <button id="cancelRun" class="danger">Cancel</button><button id="saveFromRun">Use these steps</button></div>
+          <div id="runInfo" class="muted"></div>
+          <h3>Screens</h3><div id="shots" class="shots"></div>
+          <h3>Timeline</h3><div id="timeline" class="timeline"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<dialog id="zoom"><img alt=""></dialog>
+<script>
+const $ = (id) => document.getElementById(id);
+let token = '';
+try { token = localStorage.getItem('hubToken') || ''; } catch {}
+const urlToken = new URLSearchParams(location.search).get('token');
+if (urlToken) { token = urlToken; try { localStorage.setItem('hubToken', token); } catch {} history.replaceState(null, '', location.pathname); }
+$('token').value = token;
+
+let tests = [], cur = null, runs = [], runId = null, es = null;
+
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const q = (extra = {}) => { const p = new URLSearchParams(extra); if (token) p.set('token', token); const s = p.toString(); return s ? '?' + s : ''; };
+const when = (t) => t ? new Date(t).toLocaleString() : '';
+
+async function api(path, opts = {}) {
+  const res = await fetch('/api' + path, { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) } });
+  if (res.status === 204) return null;
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.error?.message || res.statusText);
+  return body;
+}
+
+function badge(status) { return `<span class="badge ${esc(status)}">${esc(status)}</span>`; }
+
+async function loadTests(selectId) {
+  try { tests = await api('/tests'); } catch (e) { $('tests').innerHTML = `<span class="err">${esc(e.message)}</span>`; return; }
+  $('tests').innerHTML = tests.map((t) => `<button data-id="${esc(t.id)}" class="${cur && cur.id === t.id ? 'on' : ''}">
+      ${esc(t.name)}<div class="muted">${t.steps?.length ? `${t.steps.length} steps${t.verified ? ' · verified' : ''}` : 'not explored yet'}</div></button>`).join('')
+    || '<span class="muted">No tests yet.</span>';
+  if (!selectId) return;
+  if (!cur || cur.id !== selectId) { select(selectId); return; }
+  // Same test: refresh its data without resetting the open run.
+  cur = tests.find((t) => t.id === selectId) || cur;
+  renderSteps();
+}
+
+$('tests').addEventListener('click', (e) => { const b = e.target.closest('button[data-id]'); if (b) select(b.dataset.id); });
+
+function select(id) {
+  cur = tests.find((t) => t.id === id) || null;
+  document.querySelectorAll('#tests button').forEach((b) => b.classList.toggle('on', b.dataset.id === id));
+  $('none').hidden = !!cur; $('editor').hidden = !cur;
+  if (!cur) return;
+  $('f-name').value = cur.name || ''; $('f-app').value = cur.appId || ''; $('f-platform').value = cur.platform || '';
+  $('f-prompt').value = cur.prompt || '';
+  $('f-vars').value = Object.entries(cur.variables || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+  $('saveMsg').textContent = ''; $('runMsg').textContent = '';
+  renderSteps(); runId = null; $('run').hidden = true; loadRuns();
+}
+
+function parseVars() {
+  const out = {};
+  for (const line of $('f-vars').value.split('\n')) {
+    const i = line.indexOf('=');
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1);
+  }
+  return out;
+}
+
+function testBody() {
+  return { name: $('f-name').value.trim(), appId: $('f-app').value.trim(), platform: $('f-platform').value,
+    prompt: $('f-prompt').value, variables: parseVars() };
+}
+
+$('newTest').addEventListener('click', async () => {
+  try {
+    const t = await api('/tests', { method: 'POST', body: JSON.stringify({ name: 'New test', prompt: 'Describe the test here.' }) });
+    await loadTests(t.id);
+    select(t.id);
+    $('f-name').select();
+  } catch (e) { alert(e.message); }
+});
+
+$('save').addEventListener('click', async () => {
+  try {
+    cur = await api('/tests/' + cur.id, { method: 'PUT', body: JSON.stringify(testBody()) });
+    $('saveMsg').textContent = 'Saved ✓'; await loadTests(cur.id);
+  } catch (e) { $('saveMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+});
+
+$('del').addEventListener('click', async () => {
+  if (!confirm(`Delete test "${cur.name}"?`)) return;
+  await api('/tests/' + cur.id, { method: 'DELETE' }).catch((e) => alert(e.message));
+  cur = null; await loadTests(); select(null);
+});
+
+function locText(l) {
+  if (!l) return '';
+  return Object.entries(l).filter(([k, v]) => v !== '' && v !== 0).map(([k, v]) => `${k}=${typeof v === 'string' ? JSON.stringify(v) : v}`).join(' ');
+}
+
+function stepDetail(s) {
+  const parts = [];
+  if (s.target) parts.push(locText(s.target));
+  if (s.point) parts.push(`at ${s.point.x.toFixed(2)},${s.point.y.toFixed(2)}`);
+  if (s.appId) parts.push(s.appId);
+  if (s.text) parts.push(JSON.stringify(s.text));
+  if (s.direction) parts.push(s.direction);
+  if (s.key) parts.push(s.key);
+  if (s.durationMs) parts.push(s.durationMs + 'ms');
+  return parts.join(' · ');
+}
+
+function renderSteps() {
+  const steps = cur.steps || [];
+  $('verified').innerHTML = steps.length ? (cur.verified ? badge('passed').replace('passed', 'verified') : '<span class="badge canceled">not verified</span>') : '';
+  $('steps').innerHTML = steps.length ? `<table><tr><th>#</th><th>Step</th><th>Action</th><th>Target / data</th></tr>${steps.map((s, i) => `
+      <tr><td>${i + 1}</td><td>${esc(s.description)}</td><td><code>${esc(s.action)}</code></td><td><code>${esc(stepDetail(s))}</code></td></tr>`).join('')}</table>`
+    : '<div class="muted">No steps yet — click "Explore with AI".</div>';
+  $('replay').disabled = !steps.length;
+  $('stepsJson').hidden = true; $('steps').hidden = false;
+}
+
+$('editSteps').addEventListener('click', () => {
+  $('f-steps').value = JSON.stringify(cur.steps || [], null, 2);
+  $('stepsJson').hidden = false; $('steps').hidden = true;
+});
+$('cancelSteps').addEventListener('click', renderSteps);
+$('saveSteps').addEventListener('click', async () => {
+  let steps;
+  try { steps = JSON.parse($('f-steps').value); } catch (e) { alert('Invalid JSON: ' + e.message); return; }
+  try { cur = await api('/tests/' + cur.id, { method: 'PUT', body: JSON.stringify({ ...testBody(), steps }) }); renderSteps(); loadTests(cur.id); }
+  catch (e) { alert(e.message); }
+});
+
+async function loadDevices() {
+  let devs = [];
+  try { devs = await api('/devices'); } catch {}
+  const prev = $('device').value;
+  $('device').innerHTML = devs.length ? devs.map((d) => `<option value="${esc(d.agentId)}|${esc(d.serial)}" ${d.state !== 'online' ? 'disabled' : ''}>
+      ${esc(d.name || d.model || d.serial)} · ${esc(d.platform)} ${esc(d.osVersion || '')} · ${esc(d.agentName)}${d.state !== 'online' ? ' (' + esc(d.state) + ')' : ''}</option>`).join('')
+    : '<option value="">No devices connected</option>';
+  if (prev) $('device').value = prev;
+}
+
+async function startRun(kind) {
+  const [agentId, serial] = ($('device').value || '').split('|');
+  if (!serial) { $('runMsg').innerHTML = '<span class="err">Pick a device.</span>'; return; }
+  try {
+    await api('/tests/' + cur.id, { method: 'PUT', body: JSON.stringify(testBody()) });
+    const r = await api(`/tests/${cur.id}/${kind}`, { method: 'POST', body: JSON.stringify({ agentId, serial, verify: $('verify').checked }) });
+    $('runMsg').textContent = '';
+    runId = r.id; await loadRuns(); showRun(r);
+  } catch (e) { $('runMsg').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+}
+$('explore').addEventListener('click', () => startRun('explore'));
+$('replay').addEventListener('click', () => startRun('run'));
+
+async function loadRuns() {
+  if (!cur) return;
+  try { runs = await api('/runs?testId=' + encodeURIComponent(cur.id)); } catch { runs = []; }
+  $('runs').innerHTML = runs.length ? `<table><tr><th>Started</th><th>Mode</th><th>Device</th><th>Result</th><th>Steps</th></tr>${runs.slice(0, 15).map((r) => `
+      <tr data-run="${esc(r.id)}" style="cursor:pointer;${r.id === runId ? 'background:var(--bg)' : ''}"><td>${esc(when(r.startedAt))}</td><td>${esc(r.mode)}${r.parentRunId ? ' (verify)' : ''}</td>
+      <td>${esc(r.serial)}</td><td>${badge(r.status)}</td><td>${r.steps?.length ?? 0}</td></tr>`).join('')}</table>`
+    : '<div class="muted">No runs yet.</div>';
+}
+$('runs').addEventListener('click', async (e) => {
+  const tr = e.target.closest('tr[data-run]'); if (!tr) return;
+  runId = tr.dataset.run; loadRuns();
+  try { showRun(await api('/runs/' + runId)); } catch (err) { alert(err.message); }
+});
+
+function logLine(entry) {
+  return `<div class="k-${esc(entry.kind)}">${esc(new Date(entry.time).toLocaleTimeString())} ${entry.kind === 'thinking' ? '💭 ' : entry.kind === 'say' ? '🤖 ' : ''}${esc(entry.text)}</div>`;
+}
+
+function showRun(r) {
+  if (r.id !== runId) return;
+  $('run').hidden = false;
+  $('runTitle').innerHTML = `${r.mode === 'explore' ? 'AI exploration' : 'Replay'} ${badge(r.status)}`;
+  const u = r.usage;
+  $('runInfo').innerHTML = [
+    `${esc(r.serial)} · started ${esc(when(r.startedAt))}${r.endedAt ? ' · took ' + Math.round((new Date(r.endedAt) - new Date(r.startedAt)) / 1000) + 's' : ''}`,
+    r.summary ? `<div>${esc(r.summary)}</div>` : '',
+    r.error ? `<div class="err">${esc(r.error)}</div>` : '',
+    u ? `<div>${u.turns} model turns · ${u.inputTokens.toLocaleString()} in (+${u.cacheReadTokens.toLocaleString()} cached) / ${u.outputTokens.toLocaleString()} out tokens (${(u.reasoningTokens || 0).toLocaleString()} reasoning)</div>` : '',
+    r.verifyRunId ? `<div>Verification replay: <a href="#" data-goto="${esc(r.verifyRunId)}">open</a></div>` : '',
+  ].join('');
+  $('cancelRun').hidden = !!r.endedAt;
+  $('saveFromRun').hidden = !(r.mode === 'explore' && r.endedAt && r.steps.some((s) => s.kept));
+  $('shots').innerHTML = r.steps.map((s) => `<figure class="${esc(s.status)}" title="${esc(s.error || '')}">
+      ${s.screenshot ? `<img loading="lazy" src="/api/runs/${esc(r.id)}/files/${esc(s.screenshot)}${q()}" alt="">` : '<div class="muted" style="height:60px">no screenshot</div>'}
+      <figcaption>${s.n ? s.n + '. ' : '✗ '}${s.kept ? '' : '<span class="muted">(dropped) </span>'}${esc(s.step.description || s.step.action)}</figcaption></figure>`).join('')
+    || '<span class="muted">No steps yet.</span>';
+  if (r.log) $('timeline').innerHTML = r.log.map(logLine).join('');
+  $('timeline').scrollTop = $('timeline').scrollHeight;
+}
+
+$('runInfo').addEventListener('click', async (e) => {
+  const a = e.target.closest('[data-goto]'); if (!a) return;
+  e.preventDefault(); runId = a.dataset.goto; loadRuns(); showRun(await api('/runs/' + runId));
+});
+$('shots').addEventListener('click', (e) => {
+  const img = e.target.closest('img'); if (!img) return;
+  $('zoom').querySelector('img').src = img.src; $('zoom').showModal();
+});
+$('zoom').addEventListener('click', () => $('zoom').close());
+$('cancelRun').addEventListener('click', () => api(`/runs/${runId}/cancel`, { method: 'POST' }).catch((e) => alert(e.message)));
+$('saveFromRun').addEventListener('click', async () => {
+  try { const t = await api(`/runs/${runId}/save-steps`, { method: 'POST' }); await loadTests(t.id); }
+  catch (e) { alert(e.message); }
+});
+
+function connectEvents() {
+  if (es) es.close();
+  es = new EventSource('/api/events' + q({ event: 'run.updated,run.log,devices.changed,agent.connected,agent.disconnected' }));
+  es.addEventListener('run.log', (ev) => {
+    const { data } = JSON.parse(ev.data);
+    if (data.runId !== runId) return;
+    $('timeline').insertAdjacentHTML('beforeend', logLine(data.entry));
+    $('timeline').scrollTop = $('timeline').scrollHeight;
+  });
+  es.addEventListener('run.updated', async (ev) => {
+    const { data } = JSON.parse(ev.data);
+    if (!cur || data.testId !== cur.id) return;
+    if (data.id === runId) {
+      const keepLog = $('timeline').innerHTML;
+      showRun({ ...data, log: null }); $('timeline').innerHTML = keepLog;
+    }
+    if (data.endedAt) { await loadTests(cur.id); }
+    loadRuns();
+  });
+  for (const n of ['devices.changed', 'agent.connected', 'agent.disconnected']) es.addEventListener(n, loadDevices);
+}
+
+$('saveToken').addEventListener('click', () => {
+  token = $('token').value.trim();
+  try { localStorage.setItem('hubToken', token); } catch {}
+  start();
+});
+
+function start() { loadTests(); loadDevices(); connectEvents(); }
+start();
+</script>
+</body>
+</html>

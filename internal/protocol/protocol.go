@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 )
 
 // Version is bumped on breaking changes to the message envelope.
@@ -91,4 +92,25 @@ func AsError(err error) *Error {
 		return &Error{Code: CodeCanceled, Message: err.Error()}
 	}
 	return &Error{Code: CodeInternal, Message: err.Error()}
+}
+
+// HTTPStatus maps an error code to the HTTP status used by the REST APIs.
+func HTTPStatus(code string) int {
+	switch code {
+	case CodeBadRequest:
+		return http.StatusBadRequest
+	case CodeForbidden:
+		return http.StatusUnauthorized
+	case CodeNotFound:
+		return http.StatusNotFound
+	case CodeNotSupported:
+		return http.StatusNotImplemented
+	case CodeBusy:
+		return http.StatusConflict
+	case CodeUnavailable:
+		return http.StatusServiceUnavailable
+	case CodeTimeout:
+		return http.StatusGatewayTimeout
+	}
+	return http.StatusInternalServerError
 }

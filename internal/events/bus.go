@@ -2,7 +2,7 @@
 // notifications out to the tunnel and to local SSE subscribers.
 package events
 
-import "../../../mobile-device-agent/internal/events/sync"
+import "sync"
 
 // Event is a named notification with a JSON-serialisable payload.
 type Event struct {

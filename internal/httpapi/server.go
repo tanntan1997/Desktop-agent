@@ -247,22 +247,5 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, err error) {
 	e := protocol.AsError(err)
-	status := http.StatusInternalServerError
-	switch e.Code {
-	case protocol.CodeBadRequest:
-		status = http.StatusBadRequest
-	case protocol.CodeForbidden:
-		status = http.StatusUnauthorized
-	case protocol.CodeNotFound:
-		status = http.StatusNotFound
-	case protocol.CodeNotSupported:
-		status = http.StatusNotImplemented
-	case protocol.CodeBusy:
-		status = http.StatusConflict
-	case protocol.CodeUnavailable:
-		status = http.StatusServiceUnavailable
-	case protocol.CodeTimeout:
-		status = http.StatusGatewayTimeout
-	}
-	writeJSON(w, status, map[string]any{"error": e})
+	writeJSON(w, protocol.HTTPStatus(e.Code), map[string]any{"error": e})
 }
